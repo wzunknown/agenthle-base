@@ -1,0 +1,51 @@
+[project]
+name = "agenthle"
+version = "0.1.0"
+description = "Tools and utilities for managing OSWorld environments on cloud platforms"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [
+    {name = "Agenthle Contributors"}
+]
+keywords = ["osworld", "gcp", "vm", "cloud"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+]
+
+# Minimal dependencies - OSWorld submodule provides the main dependencies
+dependencies = [
+    "python-dotenv",
+    "desktop_env",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "black",
+    "ruff",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+    "submodules/OSWorld",
+]
+
+[tool.uv.sources]
+desktop_env = { workspace = true }
+
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
