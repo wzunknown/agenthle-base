@@ -3,7 +3,7 @@ name = "agenthle"
 version = "0.1.0"
 description = "Tools and utilities for managing OSWorld environments on cloud platforms"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = "<3.14,>=3.12"
 license = {text = "MIT"}
 authors = [
     {name = "Agenthle Contributors"}
@@ -17,29 +17,47 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
-# Minimal dependencies - OSWorld submodule provides the main dependencies
 dependencies = [
     "python-dotenv",
+
+    # OSWorld
     "desktop_env",
+
+    # cua
+    "cua-core",
+    "cua-computer",
+    "cua-agent[all]",
+    "cua-computer-server",
+    "cua-som",
+    "cua-mcp-server",
+    "cua-bench[all]"
 ]
+
 
 [dependency-groups]
 dev = [
     "pytest",
     "black",
     "ruff",
+    "ipykernel>=7.1.0",
 ]
 
 [tool.uv]
 package = false
 
 [tool.uv.workspace]
-members = [
-    "submodules/OSWorld",
-]
+members = []
 
 [tool.uv.sources]
-desktop_env = { workspace = true }
+desktop_env = { path = "submodules/OSWorld" }
+# cua packages are managed by the cua workspace, so we reference them via the workspace root
+cua-core = { path = "submodules/cua/libs/python/core", editable = true }
+cua-computer = { path = "submodules/cua/libs/python/computer", editable = true }
+cua-agent = { path = "submodules/cua/libs/python/agent", editable = true }
+cua-computer-server = { path = "submodules/cua/libs/python/computer-server", editable = true }
+cua-som = { path = "submodules/cua/libs/python/som", editable = true }
+cua-mcp-server = { path = "submodules/cua/libs/python/mcp-server", editable = true }
+cua-bench = { path = "submodules/cua/libs/cua-bench", editable = true }
 
 [tool.black]
 line-length = 100
@@ -49,3 +67,5 @@ target-version = ["py313"]
 line-length = 100
 target-version = "py313"
 
+[tool.setuptools]
+packages = []
