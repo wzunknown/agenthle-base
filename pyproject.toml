@@ -22,7 +22,7 @@ dependencies = [
     # OSWorld
     "desktop_env",
     # cua
-    "cua-core",
+    "cua-core[telemetry]",  # Include telemetry optional dependencies
     "cua-computer",
     "cua-agent[all]",
     "cua-computer-server",
