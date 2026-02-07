@@ -3,14 +3,31 @@
 ########## READ THIS FIRST ##########
 ### After you implement the task, you need to set the LOCAL_TASK_DIR to the local directory of the task.
 
-export LOCAL_TASK_DIR="YOUR IMPLEMENTED TASK LOCAL DIR" # e.g. ./tasks/game/magic_24
-export REMOTE_OUTPUT_DIR="output_test"  # change to the output directory you want to test if the eval function is working correctly
+: "${LOCAL_TASK_DIR:=YOUR IMPLEMENTED TASK LOCAL DIR}" # e.g. ./tasks/game/magic_24
+: "${REMOTE_OUTPUT_DIR:=output_test}"  # change to the output directory you want to test if the eval function is working correctly
 
 # **UNCOMMENT THIS IF YOU ARE ASSIGNED WITH A LITELLM KEY**
 # export OPENAI_API_BASE="https://litellm-991596698159.us-west1.run.app"
 
-export OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
-export CUA_ENV_API_URL="http://YOUR_REMOTE_MACHINE_IP:8000"
+: "${OPENAI_API_KEY:=YOUR_OPENAI_API_KEY}"
+: "${CUA_ENV_API_URL:=http://YOUR_REMOTE_MACHINE_IP:8000}"
+
+if [[ "$LOCAL_TASK_DIR" == "YOUR IMPLEMENTED TASK LOCAL DIR" ]]; then
+  echo "ERROR: LOCAL_TASK_DIR is not set. Please set it to your task folder (e.g. ./tasks/game/magic_24)." >&2
+  exit 1
+fi
+if [[ ! -d "$LOCAL_TASK_DIR" ]]; then
+  echo "ERROR: LOCAL_TASK_DIR does not exist: $LOCAL_TASK_DIR" >&2
+  exit 1
+fi
+if [[ "$OPENAI_API_KEY" == "YOUR_OPENAI_API_KEY" ]]; then
+  echo "ERROR: OPENAI_API_KEY is not set." >&2
+  exit 1
+fi
+if [[ "$CUA_ENV_API_URL" == "http://YOUR_REMOTE_MACHINE_IP:8000" ]]; then
+  echo "ERROR: CUA_ENV_API_URL is not set (example: http://<REMOTE_MACHINE_IP>:8000)." >&2
+  exit 1
+fi
 
 ###### ONLY CHANGE THE FOLLOWING CODE WHEN NECESSARY ######
 
@@ -19,6 +36,11 @@ export CUA_ENV_API_URL="http://YOUR_REMOTE_MACHINE_IP:8000"
 
 # Auto-extract TASK_CATEGORY and TASK_NAME from LOCAL_TASK_DIR
 if [[ $LOCAL_TASK_DIR =~ \./tasks/([^/]+)/([^/]+) ]]; then
+    export TASK_CATEGORY="${BASH_REMATCH[1]}"
+    export TASK_NAME="${BASH_REMATCH[2]}"
+    echo "Auto-extracted TASK_CATEGORY: $TASK_CATEGORY"
+    echo "Auto-extracted TASK_NAME: $TASK_NAME"
+elif [[ $LOCAL_TASK_DIR =~ /tasks/([^/]+)/([^/]+) ]]; then
     export TASK_CATEGORY="${BASH_REMATCH[1]}"
     export TASK_NAME="${BASH_REMATCH[2]}"
     echo "Auto-extracted TASK_CATEGORY: $TASK_CATEGORY"
