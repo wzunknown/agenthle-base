@@ -1,16 +1,11 @@
 #!/bin/bash
-# Run the following command in powershell in *REMOTE* machine to launch the server:
-# ```powershell
-# pip install "cua-computer-server[windows]"
-# cua-computer-server --host 0.0.0.0 --port 8000
-# ```
 
 # **UNCOMMENT THIS IF YOU ARE ASSIGNED WITH A LITELLM KEY**
 # export OPENAI_API_BASE="https://litellm-991596698159.us-west1.run.app"
 
 ## Replace with your own API keys and remote machine IP
 export OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
-export CUA_ENV_API_URL="http://YOUR_REMOTE_MACHINE_IP:8000"
+export CUA_ENV_API_URL="http://YOUR_REMOTE_MACHINE_IP:5000"
 
 
 export CUA_TELEMETRY_ENABLED=false

@@ -5,16 +5,17 @@
 
 export LOCAL_TASK_DIR="YOUR IMPLEMENTED TASK LOCAL DIR" # e.g. ./tasks/game/magic_24
 export REMOTE_OUTPUT_DIR="output_test"  # change to the output directory you want to test if the eval function is working correctly
+
+# **UNCOMMENT THIS IF YOU ARE ASSIGNED WITH A LITELLM KEY**
+# export OPENAI_API_BASE="https://litellm-991596698159.us-west1.run.app"
+
+export OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
+export CUA_ENV_API_URL="http://YOUR_REMOTE_MACHINE_IP:8000"
+
 ###### ONLY CHANGE THE FOLLOWING CODE WHEN NECESSARY ######
 
 
-# Load environment variables from .env file
-if [ -f "$(dirname "$0")/.cua/.env" ]; then
-    echo "Loading environment variables from .cua/.env..."
-    export $(cat "$(dirname "$0")/.cua/.env" | grep -v '^#' | xargs)
-else
-    echo "Warning: .cua/.env file not found"
-fi
+
 
 # Auto-extract TASK_CATEGORY and TASK_NAME from LOCAL_TASK_DIR
 if [[ $LOCAL_TASK_DIR =~ \./tasks/([^/]+)/([^/]+) ]]; then
