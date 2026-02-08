@@ -24,7 +24,9 @@ async def llm_vision_judge(
     max_tokens: int = 2048,
     return_binary_score: bool = False,
     api_key: Optional[str] = None,
-    return_details: bool = False
+    return_details: bool = False,
+    eval_context: Optional["EvaluationContext"] = None,
+    identifier: Optional[str] = None
 ) -> Union[str, float, dict]:
     """
     General-purpose LLM vision evaluation function supporting both single and dual image modes.
@@ -34,77 +36,51 @@ async def llm_vision_judge(
         image_bytes: Primary image to evaluate (required)
         reference_image_bytes: Optional reference image for comparison mode.
                               If provided, the LLM will see both images.
-        model: OpenAI model to use (default: "gpt-4o")
+        model: OpenAI model to use (default: "gpt-5.2")
         max_tokens: Maximum tokens for the response
         return_binary_score: If True, parses response for YES/NO and returns 1.0/0.0.
                             If False, returns the raw text response.
         api_key: OpenAI API key. If None, uses OPENAI_API_KEY from environment.
         return_details: If True, returns a dict with full details including VLM response,
                        score, prompt, model, etc. Overrides return_binary_score.
+        eval_context: Optional EvaluationContext for automatic logging. When provided,
+                     the result will be automatically logged to the context.
+        identifier: Identifier for logging (required if eval_context is provided)
 
     Returns:
         - dict with full evaluation details if return_details=True
         - float (0.0-1.0) if return_binary_score=True
         - str with LLM response otherwise
-
-    Example usage:
-        # Get full details including VLM response
-        result = await llm_vision_judge(
-            prompt="What floor is the player on?",
-            image_bytes=screenshot,
-            return_details=True
-        )
-        # Returns: {"vlm_response": "...", "score": 1.0, "prompt": "...", ...}
-
-        # Get just the score
-        score = await llm_vision_judge(
-            prompt="Do these two images show the same game state?",
-            image_bytes=target_screenshot,
-            reference_image_bytes=reference_screenshot,
-            return_binary_score=True
-        )
     """
+    result = None
+    error_msg = None
+    
     try:
         # Initialize OpenAI client
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         client = AsyncOpenAI(api_key=api_key)
 
-        # Encode primary image to base64
+        # Build content array
         primary_b64 = base64.b64encode(image_bytes).decode('utf-8')
-
-        # Build content array starting with the prompt
-        content = [{"type": "text", "text": prompt}]
-
-        # Add primary image
-        content.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/png;base64,{primary_b64}"
-            }
-        })
+        content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{primary_b64}"}}
+        ]
 
         # Add reference image if in comparison mode
+        mode = "single"
         if reference_image_bytes is not None:
             reference_b64 = base64.b64encode(reference_image_bytes).decode('utf-8')
             content.append({
                 "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/png;base64,{reference_b64}"
-                }
+                "image_url": {"url": f"data:image/png;base64,{reference_b64}"}
             })
             mode = "comparison"
-        else:
-            mode = "single"
 
         # Call OpenAI Vision API
         response = await client.chat.completions.create(
             model=model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": content
-                }
-            ],
+            messages=[{"role": "user", "content": content}],
             max_completion_tokens=max_tokens
         )
 
@@ -113,45 +89,69 @@ async def llm_vision_judge(
         logger.info(f"LLM vision judge ({mode} mode): {answer}")
 
         # Calculate score if needed
-        score = None
-        if return_binary_score or return_details:
-            answer_upper = answer.upper()
-            score = 1.0 if "YES" in answer_upper else 0.0
+        score = 1.0 if "YES" in answer.upper() else 0.0 if (return_binary_score or return_details or eval_context) else None
 
-        # Return full details if requested
-        if return_details:
-            return {
-                "vlm_response": answer,
-                "score": score,
-                "prompt": prompt,
-                "model": model,
-                "mode": mode,
-                "max_tokens": max_tokens,
-                "error": None
-            }
-
-        # Return binary score or raw text
-        if return_binary_score:
-            return score
-        else:
-            return answer
+        result = {
+            "vlm_response": answer,
+            "score": score,
+            "prompt": prompt,
+            "model": model,
+            "mode": mode,
+            "max_tokens": max_tokens,
+            "error": None
+        }
 
     except Exception as e:
         logger.error(f"Error in llm_vision_judge: {e}")
         error_msg = f"Error: {str(e)}"
+        mode = "comparison" if reference_image_bytes else "single"
 
-        if return_details:
-            return {
-                "vlm_response": None,
-                "score": 0.0,
-                "prompt": prompt,
-                "model": model,
-                "mode": "comparison" if reference_image_bytes else "single",
-                "max_tokens": max_tokens,
-                "error": error_msg
-            }
+        result = {
+            "vlm_response": None,
+            "score": 0.0,
+            "prompt": prompt,
+            "model": model,
+            "mode": mode,
+            "max_tokens": max_tokens,
+            "error": error_msg
+        }
 
-        return 0.0 if return_binary_score else error_msg
+    # Auto-log to EvaluationContext if provided
+    if eval_context is not None and identifier is not None:
+        eval_context.log_evaluation(
+            identifier=identifier,
+            score=result["score"],
+            vlm_response=result["vlm_response"],
+            prompt=result["prompt"],
+            model=result["model"],
+            error=result["error"]
+        )
+
+    # Return based on requested format
+    if return_details:
+        return result
+    elif return_binary_score:
+        return result["score"]
+    else:
+        return result["vlm_response"] if result["vlm_response"] else error_msg
+
+
+async def llm_vision_judge_single(
+    prompt: str,
+    image_bytes: bytes,
+    eval_context: Optional["EvaluationContext"] = None,
+    identifier: Optional[str] = None,
+    **kwargs
+) -> Union[str, float, dict]:
+    """Simplified single-image LLM vision evaluation function."""
+    return await llm_vision_judge(
+        prompt=prompt,
+        image_bytes=image_bytes,
+        reference_image_bytes=None,
+        eval_context=eval_context,
+        identifier=identifier,
+        **kwargs
+    )
 
 
 async def compare_screenshots_game(
@@ -251,6 +251,183 @@ def save_evaluation_results(
         return None
 
 
+class EvaluationContext:
+    """
+    Context manager for tracking and logging evaluation results automatically.
+    
+    Usage:
+        async with EvaluationContext(task_tag="my_task", mode="custom") as ctx:
+            for file in files:
+                result = await llm_vision_judge(...)
+                ctx.log_evaluation(
+                    identifier=file,
+                    score=result["score"],
+                    vlm_response=result["vlm_response"],
+                    # ... any additional fields
+                )
+                ctx.add_score(result["score"] * weight)
+            
+            return [ctx.get_final_score(num_items=len(files))]
+    """
+    
+    def __init__(
+        self,
+        task_tag: str,
+        mode: str = "custom",
+        output_dir: Optional[str] = None,
+        auto_save: bool = True,
+        **extra_metadata
+    ):
+        """
+        Initialize evaluation context.
+        
+        Args:
+            task_tag: Identifier for the task
+            mode: Evaluation mode name (e.g., "milestone", "custom", "deliverable")
+            output_dir: Directory for saving results
+            auto_save: Whether to automatically save results on context exit
+            **extra_metadata: Additional metadata to include in evaluation details
+        """
+        self.task_tag = task_tag
+        self.mode = mode
+        self.output_dir = output_dir
+        self.auto_save = auto_save
+        
+        self.evaluation_details = {
+            "mode": mode,
+            "task_tag": task_tag,
+            "timestamp": datetime.now().isoformat(),
+            "evaluations": [],
+            **extra_metadata
+        }
+        self._total_score = 0.0
+        self._num_evaluated = 0
+        self._finalized = False
+    
+    def log_evaluation(
+        self,
+        identifier: str,
+        score: float,
+        vlm_response: Optional[str] = None,
+        prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        error: Optional[str] = None,
+        **extra_fields
+    ) -> None:
+        """
+        Log a single evaluation result with automatic logging.
+        
+        Args:
+            identifier: Unique identifier for this evaluation (e.g., filename, milestone)
+            score: Score for this evaluation (0.0-1.0)
+            vlm_response: Optional VLM response text
+            prompt: Optional prompt used
+            model: Optional model name
+            error: Optional error message
+            **extra_fields: Any additional fields to store
+        """
+        eval_entry = {
+            "identifier": identifier,
+            "score": score,
+            "vlm_response": vlm_response,
+            "prompt": prompt,
+            "model": model,
+            "error": error,
+            **extra_fields
+        }
+        # Remove None values for cleaner output
+        eval_entry = {k: v for k, v in eval_entry.items() if v is not None}
+        
+        self.evaluation_details["evaluations"].append(eval_entry)
+        self._num_evaluated += 1
+        
+        # Automatic logging
+        if vlm_response:
+            logger.info(f"Identifier '{identifier}' VLM response: {vlm_response}")
+        logger.info(f"Identifier '{identifier}' judgment score: {score}")
+        if error:
+            logger.error(f"Identifier '{identifier}' error: {error}")
+    
+    def log_error(self, identifier: str, error: Union[str, Exception], score: float = 0.0) -> None:
+        """Log an evaluation error."""
+        error_msg = str(error)
+        self.log_evaluation(identifier=identifier, score=score, error=error_msg)
+        logger.error(f"Error evaluating identifier '{identifier}': {error_msg}")
+    
+    def add_score(self, score: float) -> None:
+        """Add to the cumulative total score."""
+        self._total_score += score
+    
+    def get_final_score(self, num_items: Optional[int] = None) -> float:
+        """
+        Get the final normalized score.
+        
+        Args:
+            num_items: If provided, divides total_score by this number.
+                      If None, returns raw total_score.
+        """
+        if num_items and num_items > 0:
+            return self._total_score / num_items
+        return self._total_score
+    
+    @property
+    def total_score(self) -> float:
+        """Get the raw cumulative score."""
+        return self._total_score
+    
+    @property
+    def num_evaluated(self) -> int:
+        """Get the number of evaluations logged."""
+        return self._num_evaluated
+    
+    def finalize(self, **extra_summary) -> tuple[float, dict]:
+        """
+        Finalize evaluation, add summary, and save results.
+        
+        Args:
+            **extra_summary: Additional fields to include in summary
+            
+        Returns:
+            Tuple of (final_score, evaluation_details)
+        """
+        if self._finalized:
+            return self._total_score, self.evaluation_details
+        
+        self.evaluation_details["summary"] = {
+            "total_score": self._total_score,
+            "num_evaluated": self._num_evaluated,
+            **extra_summary
+        }
+        
+        logger.info(f"Evaluation complete. Total score: {self._total_score} ({self._num_evaluated} evaluated)")
+        
+        if self.auto_save:
+            save_evaluation_results(self.evaluation_details, self.task_tag, self.output_dir)
+        
+        self._finalized = True
+        return self._total_score, self.evaluation_details
+    
+    async def __aenter__(self) -> "EvaluationContext":
+        """Async context manager entry."""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Async context manager exit - auto-finalize on success."""
+        if exc_type is None and not self._finalized:
+            self.finalize()
+        return False
+    
+    def __enter__(self) -> "EvaluationContext":
+        """Sync context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Sync context manager exit - auto-finalize on success."""
+        if exc_type is None and not self._finalized:
+            self.finalize()
+        return False
+
+
 async def evaluate_milestone_mode(
     session: "DesktopSession",
     target_path: str,
@@ -261,18 +438,6 @@ async def evaluate_milestone_mode(
 ) -> tuple[float, dict]:
     """
     Evaluate using milestone mode: compare agent-saved screenshots with references.
-
-    Args:
-        session: Desktop session for file operations
-        target_path: Directory containing agent-saved milestone screenshots
-        reference_path: Directory containing reference screenshots
-        task_tag: Task identifier
-        comparison_fn: Function to compare screenshots, signature:
-                      async fn(target_bytes, reference_bytes, identifier) -> dict
-        output_dir: Optional directory for saving evaluation results
-
-    Returns:
-        Tuple of (final_score, evaluation_details)
     """
     # Check if target directory exists
     exists = await session.exists(target_path)
@@ -285,88 +450,55 @@ async def evaluate_milestone_mode(
         session, target_path, reference_path
     )
 
-    evaluation_details = {
-        "mode": "milestone",
-        "task_tag": task_tag,
-        "timestamp": datetime.now().isoformat(),
-        "target_path": target_path,
-        "reference_path": reference_path,
-        "evaluations": []
-    }
+    async with EvaluationContext(
+        task_tag=task_tag,
+        mode="milestone",
+        output_dir=output_dir,
+        target_path=target_path,
+        reference_path=reference_path
+    ) as ctx:
+        # Evaluate matching files
+        for file in target_files:
+            if file in reference_files:
+                try:
+                    target_file_path = os.path.join(target_path, file)
+                    reference_file_path = os.path.join(reference_path, file)
+                    identifier = os.path.splitext(file)[0]
 
-    total_scores = 0.0
-    num_evaluated = 0
+                    logger.info(f"Evaluating milestone: {file}")
 
-    # Evaluate matching files
-    for file in target_files:
-        if file in reference_files:
-            try:
-                target_file_path = os.path.join(target_path, file)
-                reference_file_path = os.path.join(reference_path, file)
+                    # Download images from remote server
+                    target_image_bytes = await session.read_bytes(target_file_path)
+                    reference_image_bytes = await session.read_bytes(reference_file_path)
 
-                logger.info(f"Evaluating milestone: {file}")
+                    # Compare screenshots
+                    eval_result = await comparison_fn(
+                        target_image_bytes, reference_image_bytes, identifier
+                    )
 
-                # Download images from remote server
-                target_image_bytes = await session.read_bytes(target_file_path)
-                reference_image_bytes = await session.read_bytes(reference_file_path)
+                    score = eval_result["score"]
+                    ctx.log_evaluation(
+                        identifier=identifier,
+                        score=score,
+                        vlm_response=eval_result["vlm_response"],
+                        prompt=eval_result["prompt"],
+                        model=eval_result["model"],
+                        mode=eval_result["mode"],
+                        error=eval_result["error"],
+                        target_file_path=target_file_path,
+                        reference_file_path=reference_file_path,
+                        file=file
+                    )
+                    ctx.add_score(score / len(reference_files))
 
-                # Extract identifier from filename
-                identifier = os.path.splitext(file)[0]
+                except Exception as e:
+                    ctx.log_error(identifier=file, error=e)
 
-                # Compare screenshots
-                eval_result = await comparison_fn(
-                    target_image_bytes, reference_image_bytes, identifier
-                )
+        return ctx.finalize(
+            num_reference_files=len(reference_files),
+            num_target_files=len(target_files)
+        )
 
-                score = eval_result["score"]
-
-                # Store detailed evaluation info
-                evaluation_details["evaluations"].append({
-                    "file": file,
-                    "identifier": identifier,
-                    "target_file_path": target_file_path,
-                    "reference_file_path": reference_file_path,
-                    "score": score,
-                    "vlm_response": eval_result["vlm_response"],
-                    "prompt": eval_result["prompt"],
-                    "model": eval_result["model"],
-                    "mode": eval_result["mode"],
-                    "error": eval_result["error"]
-                })
-
-                logger.info(f"Identifier '{identifier}' VLM response: {eval_result['vlm_response']}")
-                logger.info(f"Identifier '{identifier}' judgment score: {score}")
-                total_scores += score / len(reference_files)
-                num_evaluated += 1
-
-            except Exception as e:
-                logger.error(f"Error evaluating file {file}: {e}")
-                evaluation_details["evaluations"].append({
-                    "file": file,
-                    "identifier": os.path.splitext(file)[0],
-                    "error": str(e),
-                    "score": 0.0
-                })
-
-    # Calculate final score
-    final_score = total_scores if num_evaluated > 0 else 0.0
-
-    # Add summary
-    evaluation_details["summary"] = {
-        "total_score": final_score,
-        "num_evaluated": num_evaluated,
-        "num_reference_files": len(reference_files),
-        "num_target_files": len(target_files)
-    }
-
-    logger.info(f"Evaluation complete. Total score: {final_score} ({num_evaluated} files evaluated)")
-
-    # Save results
-    save_evaluation_results(evaluation_details, task_tag, output_dir)
-
-    return final_score, evaluation_details
-
-######## TODO: DELIVERABLE MODE (IN DEVELOPMENT) ########
 
 async def evaluate_deliverable_mode(
     session: "DesktopSession",
@@ -380,189 +512,137 @@ async def evaluate_deliverable_mode(
 ) -> tuple[float, dict]:
     """
     Evaluate using deliverable mode: replay trajectory and take screenshots at specified points.
-
-    Args:
-        session: Desktop session for file operations
-        trajectory_dir: Directory containing agent trajectory files
-        reference_path: Directory containing reference screenshots
-        task_tag: Task identifier
-        comparison_fn: Function to compare screenshots, signature:
-                      async fn(target_bytes, reference_bytes, identifier) -> dict
-        screenshot_points: List of action indices where screenshots should be taken
-                          (e.g., [10, 20, 30] means take screenshots after actions 10, 20, 30)
-        action_delay: Delay between actions during replay (seconds)
-        output_dir: Optional directory for saving evaluation results
-
-    Returns:
-        Tuple of (final_score, evaluation_details)
     """
     from cua_bench import replay_trajectory
 
-    evaluation_details = {
-        "mode": "deliverable",
-        "task_tag": task_tag,
-        "timestamp": datetime.now().isoformat(),
-        "trajectory_dir": str(trajectory_dir),
-        "reference_path": reference_path,
-        "screenshot_points": screenshot_points,
-        "evaluations": []
-    }
+    async with EvaluationContext(
+        task_tag=task_tag,
+        mode="deliverable",
+        output_dir=output_dir,
+        trajectory_dir=str(trajectory_dir),
+        reference_path=reference_path,
+        screenshot_points=screenshot_points
+    ) as ctx:
+        try:
+            # Get reference files to know what to compare
+            reference_files = await session.list_dir(reference_path)
 
-    try:
-        # Get reference files to know what to compare
-        reference_files = await session.list_dir(reference_path)
+            # Replay trajectory with screenshots at specified points
+            logger.info(f"Replaying trajectory from: {trajectory_dir}")
 
-        # Replay trajectory with screenshots at specified points
-        logger.info(f"Replaying trajectory from: {trajectory_dir}")
+            from pathlib import Path
+            import json
 
-        # We'll need to modify replay_trajectory or create a custom version
-        # For now, let's replay and take screenshots manually
-        from pathlib import Path
-        import json
+            trajectory_path = Path(trajectory_dir)
+            if not trajectory_path.exists():
+                raise FileNotFoundError(f"Trajectory directory not found: {trajectory_dir}")
 
-        trajectory_path = Path(trajectory_dir)
-        if not trajectory_path.exists():
-            raise FileNotFoundError(f"Trajectory directory not found: {trajectory_dir}")
+            # Find latest agent response file
+            response_files = sorted(trajectory_path.rglob("*_agent_response.json"))
+            if not response_files:
+                raise ValueError(f"No agent_response.json files found in {trajectory_dir}")
 
-        # Find latest agent response file
-        response_files = sorted(trajectory_path.rglob("*_agent_response.json"))
-        if not response_files:
-            raise ValueError(f"No agent_response.json files found in {trajectory_dir}")
+            latest_response_file = response_files[-1]
+            logger.info(f"Using trajectory file: {latest_response_file.name}")
 
-        latest_response_file = response_files[-1]
-        logger.info(f"Using trajectory file: {latest_response_file.name}")
+            # Load and extract actions
+            with open(latest_response_file, "r") as f:
+                data = json.load(f)
 
-        # Load and extract actions
-        with open(latest_response_file, "r") as f:
-            data = json.load(f)
+            messages = data.get("kwargs", {}).get("messages", [])
+            actions_to_execute = []
+            for item in messages:
+                if isinstance(item, dict) and item.get("type") == "computer_call":
+                    action = item.get("action", {})
+                    action_type = action.get("type")
+                    if action_type and action_type != "screenshot":
+                        actions_to_execute.append(action)
 
-        messages = data.get("kwargs", {}).get("messages", [])
-        actions_to_execute = []
-        for item in messages:
-            if isinstance(item, dict) and item.get("type") == "computer_call":
-                action = item.get("action", {})
+            logger.info(f"Found {len(actions_to_execute)} actions to replay")
+
+            # Import computer handler
+            from agent.computers import cuaComputerHandler
+            handler = cuaComputerHandler(session._computer)
+            await handler._initialize()
+
+            # Replay actions and take screenshots at specified points
+            screenshots_taken = {}
+
+            for i, action in enumerate(actions_to_execute):
                 action_type = action.get("type")
-                if action_type and action_type != "screenshot":
-                    actions_to_execute.append(action)
+                action_args = {k: v for k, v in action.items() if k != "type"}
 
-        logger.info(f"Found {len(actions_to_execute)} actions to replay")
+                logger.info(f"[{i+1}/{len(actions_to_execute)}] Executing: {action_type}({action_args})")
 
-        # Import computer handler
-        from agent.computers import cuaComputerHandler
-        handler = cuaComputerHandler(session._computer)
-        await handler._initialize()
+                method = getattr(handler, action_type, None)
+                if method:
+                    try:
+                        await method(**action_args)
+                    except Exception as e:
+                        logger.error(f"Action {action_type} failed: {e}")
 
-        # Replay actions and take screenshots at specified points
-        screenshots_taken = {}
+                # Take screenshot if at a screenshot point
+                if i + 1 in screenshot_points:
+                    try:
+                        screenshot_bytes = await session.screenshot()
+                        # Map this screenshot to corresponding reference file
+                        point_index = screenshot_points.index(i + 1)
+                        if point_index < len(reference_files):
+                            identifier = os.path.splitext(reference_files[point_index])[0]
+                            screenshots_taken[identifier] = screenshot_bytes
+                            logger.info(f"Screenshot taken at action {i+1} for identifier '{identifier}'")
+                    except Exception as e:
+                        logger.error(f"Failed to take screenshot at action {i+1}: {e}")
 
-        for i, action in enumerate(actions_to_execute):
-            action_type = action.get("type")
-            action_args = {k: v for k, v in action.items() if k != "type"}
+                await asyncio.sleep(action_delay)
 
-            logger.info(f"[{i+1}/{len(actions_to_execute)}] Executing: {action_type}({action_args})")
+            # Now compare screenshots with references
+            for ref_file in reference_files:
+                identifier = os.path.splitext(ref_file)[0]
 
-            method = getattr(handler, action_type, None)
-            if method:
-                try:
-                    await method(**action_args)
-                except Exception as e:
-                    logger.error(f"Action {action_type} failed: {e}")
+                if identifier in screenshots_taken:
+                    try:
+                        reference_file_path = os.path.join(reference_path, ref_file)
+                        reference_image_bytes = await session.read_bytes(reference_file_path)
+                        target_image_bytes = screenshots_taken[identifier]
 
-            # Take screenshot if at a screenshot point
-            if i + 1 in screenshot_points:
-                try:
-                    screenshot_bytes = await session.screenshot()
-                    # Map this screenshot to corresponding reference file
-                    # Assuming screenshot_points indices map to reference files by index
-                    point_index = screenshot_points.index(i + 1)
-                    if point_index < len(reference_files):
-                        identifier = os.path.splitext(reference_files[point_index])[0]
-                        screenshots_taken[identifier] = screenshot_bytes
-                        logger.info(f"Screenshot taken at action {i+1} for identifier '{identifier}'")
-                except Exception as e:
-                    logger.error(f"Failed to take screenshot at action {i+1}: {e}")
+                        logger.info(f"Evaluating deliverable: {identifier}")
 
-            await asyncio.sleep(action_delay)
+                        # Compare screenshots
+                        eval_result = await comparison_fn(
+                            target_image_bytes, reference_image_bytes, identifier
+                        )
 
-        # Now compare screenshots with references
-        total_scores = 0.0
-        num_evaluated = 0
+                        score = eval_result["score"]
+                        ctx.log_evaluation(
+                            identifier=identifier,
+                            score=score,
+                            vlm_response=eval_result["vlm_response"],
+                            prompt=eval_result["prompt"],
+                            model=eval_result["model"],
+                            mode=eval_result["mode"],
+                            error=eval_result["error"],
+                            reference_file=ref_file,
+                            reference_file_path=reference_file_path
+                        )
+                        ctx.add_score(score / len(reference_files))
 
-        for ref_file in reference_files:
-            identifier = os.path.splitext(ref_file)[0]
-
-            if identifier in screenshots_taken:
-                try:
-                    reference_file_path = os.path.join(reference_path, ref_file)
-                    reference_image_bytes = await session.read_bytes(reference_file_path)
-                    target_image_bytes = screenshots_taken[identifier]
-
-                    logger.info(f"Evaluating deliverable: {identifier}")
-
-                    # Compare screenshots
-                    eval_result = await comparison_fn(
-                        target_image_bytes, reference_image_bytes, identifier
+                    except Exception as e:
+                        ctx.log_error(identifier=identifier, error=e)
+                else:
+                    ctx.log_evaluation(
+                        identifier=identifier,
+                        score=0.0,
+                        error="No screenshot taken at corresponding point"
                     )
 
-                    score = eval_result["score"]
+            return ctx.finalize(
+                num_reference_files=len(reference_files),
+                num_screenshots_taken=len(screenshots_taken),
+                total_actions_replayed=len(actions_to_execute)
+            )
 
-                    evaluation_details["evaluations"].append({
-                        "identifier": identifier,
-                        "reference_file": ref_file,
-                        "reference_file_path": reference_file_path,
-                        "score": score,
-                        "vlm_response": eval_result["vlm_response"],
-                        "prompt": eval_result["prompt"],
-                        "model": eval_result["model"],
-                        "mode": eval_result["mode"],
-                        "error": eval_result["error"]
-                    })
-
-                    logger.info(f"Identifier '{identifier}' VLM response: {eval_result['vlm_response']}")
-                    logger.info(f"Identifier '{identifier}' judgment score: {score}")
-                    total_scores += score / len(reference_files)
-                    num_evaluated += 1
-
-                except Exception as e:
-                    logger.error(f"Error evaluating identifier {identifier}: {e}")
-                    evaluation_details["evaluations"].append({
-                        "identifier": identifier,
-                        "error": str(e),
-                        "score": 0.0
-                    })
-            else:
-                logger.warning(f"No screenshot taken for identifier '{identifier}'")
-                evaluation_details["evaluations"].append({
-                    "identifier": identifier,
-                    "error": "No screenshot taken at corresponding point",
-                    "score": 0.0
-                })
-
-        # Calculate final score
-        final_score = total_scores if num_evaluated > 0 else 0.0
-
-        # Add summary
-        evaluation_details["summary"] = {
-            "total_score": final_score,
-            "num_evaluated": num_evaluated,
-            "num_reference_files": len(reference_files),
-            "num_screenshots_taken": len(screenshots_taken),
-            "total_actions_replayed": len(actions_to_execute)
-        }
-
-        logger.info(f"Deliverable evaluation complete. Total score: {final_score} ({num_evaluated} evaluated)")
-
-    except Exception as e:
-        logger.error(f"Error in deliverable evaluation: {e}")
-        evaluation_details["error"] = str(e)
-        evaluation_details["summary"] = {
-            "total_score": 0.0,
-            "num_evaluated": 0,
-            "error": str(e)
-        }
-        final_score = 0.0
-
-    # Save results
-    save_evaluation_results(evaluation_details, task_tag, output_dir)
-
-    return final_score, evaluation_details
+        except Exception as e:
+            logger.error(f"Error in deliverable evaluation: {e}")
+            ctx.evaluation_details["error"] = str(e)
+            return ctx.finalize(error=str(e))
